@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Juggle Simulator</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #7ec0ee;
+            font-family: sans-serif;
+            touch-action: none;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        button {
+            background: rgba(255, 255, 255, 0.8);
+            border: 2px solid #333;
+            padding: 10px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 20px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            outline: none;
+            transition: all 0.2s ease;
+        }
+        button:active {
+            transform: scale(0.95);
+        }
+        #scoreboard {
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 10px 18px;
+            border-radius: 20px;
+            font-size: 16px;
+            font-weight: bold;
+            display: flex;
+            gap: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            transition: background 0.2s;
+        }
+        .flash {
+            background: rgba(255, 0, 0, 0.8) !important;
+        }
+        .instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+            font-size: 14px;
+            pointer-events: none;
+            text-align: center;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <button id="mode-btn">Night Mode</button>
+        <button id="count-btn">2 Balls</button>
+        <div id="scoreboard">
+            <span>Time: <span id="current-time">0.00</span>s</span>
+            <span>Top: <span id="top-time">0.00</span>s</span>
+        </div>
+    </div>
+    <div class="instructions">Hasbro ©</div>
+    <div id="canvas-container"></div>
+
+    <!-- Include Three.js library -->
+    <script src="three.min.js"></script>
+
+    <script>
+        // Setup Scene, Camera, Renderer
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x7ec0ee);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 0, 20);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        // Lighting setup
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 12, 10);
+        scene.add(dirLight);
+
+        // Calculate responsive world bounds
+        function getBounds() {
+            const distance = camera.position.z;
+            const vFov = (camera.fov * Math.PI) / 180;
+            const height = 2 * Math.tan(vFov / 2) * distance;
+            const width = height * camera.aspect;
+            return {
+                left: -width / 2 + 1.0,
+                right: width / 2 - 1.0,
+                bottom: -height / 2 + 1.5
+            };
+        }
+        let bounds = getBounds();
+
+        // Environment: Ground plane
+        const groundGeo = new THREE.PlaneGeometry(60, 20);
+        const groundMat = new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.8 });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.position.set(0, bounds.bottom, -1);
+        scene.add(ground);
+
+        // Stars setup for Night Mode
+        const starGeo = new THREE.BufferGeometry();
+        const starCount = 200;
+        const starPositions = new Float32Array(starCount * 3);
+        for (let i = 0; i < starCount * 3; i += 3) {
+            starPositions[i] = (Math.random() - 0.5) * 50;
+            starPositions[i+1] = Math.random() * 25 + 2;
+            starPositions[i+2] = (Math.random() - 0.5) * 20 - 5;
+        }
+        starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+        const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.15 });
+        const stars = new THREE.Points(starGeo, starMat);
+        stars.visible = false;
+        scene.add(stars);
+
+        // Moon setup
+        const moonGeo = new THREE.SphereGeometry(1.5, 32, 32);
+        const moonMat = new THREE.MeshBasicMaterial({ color: 0xffffee });
+        const moon = new THREE.Mesh(moonGeo, moonMat);
+        moon.position.set(8, 9, -8);
+        moon.visible = false;
+        scene.add(moon);
+
+        // Ball definitions (support up to 3 balls)
+        const ballColors = [0xe91e63, 0x00bcd4, 0xffeb3b];
+        const allBalls = [];
+        const radius = 0.8;
+
+        ballColors.forEach((color, index) => {
+            const geometry = new THREE.SphereGeometry(radius, 32, 32);
+            const material = new THREE.MeshStandardMaterial({ 
+                color: color, 
+                roughness: 0.3, 
+                metalness: 0.1 
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+            scene.add(mesh);
+
+            allBalls.push({
+                mesh: mesh,
+                position: new THREE.Vector3((index - 1) * 2.5, bounds.bottom + radius, 0),
+                velocity: new THREE.Vector3(0, 0, 0),
+                radius: radius,
+                isHeld: false,
+                canPass: true,
+                active: index < 3 // Default to 3 or dynamic
+            });
+        });
+
+        // Current active ball count (3 by default)
+        let activeBallCount = 3;
+
+        function updateBallCount(count) {
+            activeBallCount = count;
+            allBalls.forEach((b, idx) => {
+                b.active = idx < count;
+                b.mesh.visible = b.active;
+                if (!b.active) {
+                    b.isHeld = false;
+                    b.velocity.set(0, 0, 0);
+                } else {
+                    b.position.set((idx - (count === 2 ? 0.5 : 1)) * 3.0, bounds.bottom + radius, 0);
+                    b.velocity.set(0, 0, 0);
+                    b.canPass = true;
+                }
+            });
+            // Reset timer state on mode change
+            isJuggling = false;
+            currentTimeEl.textContent = "0.00";
+        }
+
+        // Timer State Variables
+        let juggleStartTime = 0;
+        let isJuggling = false;
+        let topTime = 0;
+        const currentTimeEl = document.getElementById('current-time');
+        const topTimeEl = document.getElementById('top-time');
+        const scoreboardEl = document.getElementById('scoreboard');
+
+        // Multi-touch tracking map: pointerId -> touch details
+        const activeTouches = new Map();
+        const raycaster = new THREE.Raycaster();
+        const planeZ = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+
+        function getIntersectionPoint(clientX, clientY) {
+            const pointer = new THREE.Vector2();
+            pointer.x = (clientX / window.innerWidth) * 2 - 1;
+            pointer.y = -(clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(pointer, camera);
+            const target = new THREE.Vector3();
+            raycaster.ray.intersectPlane(planeZ, target);
+            return target;
+        }
+
+        // Pointer event listeners for multi-touch grabbing
+        window.addEventListener('pointerdown', (e) => {
+            const coords = getIntersectionPoint(e.clientX, e.clientY);
+            for (let ball of allBalls) {
+                if (ball.active && !ball.isHeld && ball.position.distanceTo(coords) < ball.radius * 1.8) {
+                    ball.isHeld = true;
+                    ball.canPass = true;
+                    ball.velocity.set(0, 0, 0);
+
+                    activeTouches.set(e.pointerId, {
+                        ball: ball,
+                        lastPos: coords.clone(),
+                        lastTime: performance.now()
+                    });
+                    break;
+                }
+            }
+        });
+
+        window.addEventListener('pointermove', (e) => {
+            if (!activeTouches.has(e.pointerId)) return;
+            const touchData = activeTouches.get(e.pointerId);
+            const coords = getIntersectionPoint(e.clientX, e.clientY);
+            const now = performance.now();
+            const dt = (now - touchData.lastTime) / 1000;
+
+            if (dt > 0) {
+                touchData.ball.velocity.copy(coords).sub(touchData.lastPos).divideScalar(Math.max(dt, 0.01)).multiplyScalar(1.4);
+                if (touchData.ball.velocity.length() > 50) {
+                    touchData.ball.velocity.clampLength(0, 50);
+                }
+            }
+
+            touchData.lastPos.copy(coords);
+            touchData.lastTime = now;
+            touchData.ball.position.copy(coords);
+        });
+
+        function releaseTouch(pointerId) {
+            if (activeTouches.has(pointerId)) {
+                const touchData = activeTouches.get(pointerId);
+                if (touchData.ball.velocity.y < 3) {
+                    touchData.ball.velocity.y += 4;
+                }
+                touchData.ball.canPass = true;
+                touchData.ball.isHeld = false;
+                activeTouches.delete(pointerId);
+            }
+        }
+
+        window.addEventListener('pointerup', (e) => releaseTouch(e.pointerId));
+        window.addEventListener('pointercancel', (e) => releaseTouch(e.pointerId));
+
+        // UI Buttons Configuration
+        const modeBtn = document.getElementById('mode-btn');
+        const countBtn = document.getElementById('count-btn');
+        let isNight = false;
+
+        modeBtn.addEventListener('click', () => {
+            isNight = !isNight;
+            if (isNight) {
+                scene.background.set(0x0b1026);
+                ground.material.color.set(0x1b3b22);
+                ambientLight.color.set(0x7986cb);
+                ambientLight.intensity = 0.4;
+                dirLight.color.set(0x9fa8da);
+                dirLight.intensity = 0.5;
+                stars.visible = true;
+                moon.visible = true;
+                modeBtn.textContent = "Day Mode";
+                modeBtn.style.background = "rgba(40, 44, 52, 0.8)";
+                modeBtn.style.color = "white";
+            } else {
+                scene.background.set(0x7ec0ee);
+                ground.material.color.set(0x4caf50);
+                ambientLight.color.set(0xffffff);
+                ambientLight.intensity = 0.7;
+                dirLight.color.set(0xffffff);
+                dirLight.intensity = 0.8;
+                stars.visible = false;
+                moon.visible = false;
+                modeBtn.textContent = "Night Mode";
+                modeBtn.style.background = "rgba(255, 255, 255, 0.8)";
+                modeBtn.style.color = "black";
+            }
+        });
+
+        countBtn.addEventListener('click', () => {
+            if (activeBallCount === 3) {
+                updateBallCount(2);
+                countBtn.textContent = "3 Balls";
+            } else {
+                updateBallCount(3);
+                countBtn.textContent = "2 Balls";
+            }
+        });
+
+        // Physics & Animation Parameters
+        const gravity = -28;
+        const restitution = 0.75;
+        const damping = 0.99;
+        let lastTime = performance.now();
+
+        function animate(currentTime) {
+            requestAnimationFrame(animate);
+
+            const dt = Math.min((currentTime - lastTime) / 1000, 0.1);
+            lastTime = currentTime;
+
+            if (isNight) {
+                stars.rotation.y += dt * 0.02;
+            }
+
+            bounds = getBounds();
+
+            let allOffGround = true;
+            let hitGround = false;
+
+            const activeList = allBalls.filter(b => b.active);
+
+            for (let i = 0; i < activeList.length; i++) {
+                let ball = activeList[i];
+
+                if (!ball.isHeld) {
+                    ball.velocity.y += gravity * dt;
+                    ball.velocity.multiplyScalar(Math.pow(damping, dt * 60));
+                    ball.position.addScaledVector(ball.velocity, dt);
+
+                    // Switch from pass-through to solid at the peak of throw / falling down
+                    if (ball.velocity.y <= 0) {
+                        ball.canPass = false;
+                    }
+
+                    // Side wall bounds check
+                    if (ball.position.x - ball.radius < bounds.left) {
+                        ball.position.x = bounds.left + ball.radius;
+                        ball.velocity.x *= -restitution;
+                    } else if (ball.position.x + ball.radius > bounds.right) {
+                        ball.position.x = bounds.right - ball.radius;
+                        ball.velocity.x *= -restitution;
+                    }
+
+                    // Ground collision check
+                    const groundThreshold = bounds.bottom + ball.radius + 0.05;
+                    if (ball.position.y <= groundThreshold) {
+                        ball.position.y = bounds.bottom + ball.radius;
+                        if (Math.abs(ball.velocity.y) > 1.0) {
+                            hitGround = true;
+                        }
+                        ball.velocity.y *= -restitution;
+                        ball.velocity.x *= 0.95;
+                        ball.canPass = false;
+                    }
+                }
+
+                if (ball.position.y <= bounds.bottom + ball.radius + 0.1 && !ball.isHeld) {
+                    allOffGround = false;
+                }
+
+                // Ball-to-ball collision handling
+                for (let j = i + 1; j < activeList.length; j++) {
+                    let ballB = activeList[j];
+                    
+                    if (ball.canPass || ballB.canPass) {
+                        continue;
+                    }
+
+                    const distVec = new THREE.Vector3().subVectors(ballB.position, ball.position);
+                    const distance = distVec.length();
+                    const minDist = ball.radius + ballB.radius;
+
+                    if (distance < minDist) {
+                        const overlap = minDist - distance;
+                        const correctionDir = distVec.clone().normalize();
+
+                        if (!ball.isHeld && !ballB.isHeld) {
+                            ball.position.addScaledVector(correctionDir, -overlap * 0.5);
+                            ballB.position.addScaledVector(correctionDir, overlap * 0.5);
+
+                            const relVel = new THREE.Vector3().subVectors(ballB.velocity, ball.velocity);
+                            const velAlongNormal = relVel.dot(correctionDir);
+
+                            if (velAlongNormal < 0) {
+                                const impulse = -(1 + restitution) * velAlongNormal / 2;
+                                ball.velocity.addScaledVector(correctionDir, -impulse);
+                                ballB.velocity.addScaledVector(correctionDir, impulse);
+                            }
+                        } else if (ball.isHeld && !ballB.isHeld) {
+                            ballB.position.addScaledVector(correctionDir, overlap);
+                            ballB.velocity.addScaledVector(correctionDir, 5);
+                        } else if (!ball.isHeld && ballB.isHeld) {
+                            ball.position.addScaledVector(correctionDir, -overlap);
+                            ball.velocity.addScaledVector(correctionDir, -5);
+                        }
+                    }
+                }
+
+                ball.mesh.position.copy(ball.position);
+            }
+
+            // Scoreboard timer update logic
+            const nowSec = currentTime / 1000;
+            if (!isJuggling && allOffGround) {
+                isJuggling = true;
+                juggleStartTime = nowSec;
+            } else if (isJuggling) {
+                if (hitGround || !allOffGround) {
+                    const finalTime = nowSec - juggleStartTime;
+                    if (finalTime > topTime) {
+                        topTime = finalTime;
+                        topTimeEl.textContent = topTime.toFixed(2);
+                    }
+                    isJuggling = false;
+                    currentTimeEl.textContent = "0.00";
+
+                    scoreboardEl.classList.add('flash');
+                    setTimeout(() => scoreboardEl.classList.remove('flash'), 300);
+                } else {
+                    const elapsed = nowSec - juggleStartTime;
+                    currentTimeEl.textContent = elapsed.toFixed(2);
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        requestAnimationFrame(animate);
+
+        // Responsive window resizing
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            bounds = getBounds();
+            ground.position.y = bounds.bottom;
+        });
+    </script>
+</body>
+</html>
