@@ -1,4 +1,7 @@
-# AndroidJugglingSimulator
+# AndroidJugglingSimulator  
+
+![night](nightjuggle.gif)  
+
 
 juggling simulator for android  
 
